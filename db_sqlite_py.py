@@ -2,7 +2,7 @@
 # Name:         db_sqlite_py
 # Purpose:      Для работы с базой данных SQLite
 #               Предназначен для взаимодействия с БД SQLite
-#               включает 3 класса:
+#               включает 4 класса:
 # Author:       Цымай Дмитрий (dmitry-zy@yandex.ru)
 #
 # Created:      25.05.2013
@@ -17,47 +17,49 @@ import pickle
 import sys
 import os
 import time
-
+#
 def info():
-    #Общая информация
+    '''Общая информация'''
     print("database 0 sqlite3 ")
     return True
     #
 class Journal(object):
-    #Класс для ведения журнала действий
+    '''Класс для ведения журнала действий'''
     def __init__(self,output=True,file_name='journal'):
         self.__filename=file_name+'.out'
         self.__out=[]
-        self.restore()
+        self.output=output
+        if self.output:
+            self.restore()
     #
     def __del__(self):
-        #Очистка всех записей
+        #Запись в файл
         self.save()
-        print self.__out
+        #self.getJournal()
     #
     def clear(self):
+        #Очистка всех записей
         self.__out=[]
         self.save()
     #
     def getJournal(self):
         #возвращает список ошибок
         #
+        if self.output:
+            print(self.__out)
         return self.__out
         #
     def save(self):
         #Запись результатов вывода в файл
         #
-        f_out=open(self.__filename,"w")
-        rec_str=pickle.dump(self.__out,f_out)
-        f_out.close()
+        with open(self.__filename,"wb") as f_out:
+            rec_str=pickle.dump(self.__out,f_out)
         #
     def restore(self):
         #Восстановление результатов вывода из файла
         #
-        f_in=open(self.__filename,"r")
-        rec_str=pickle.load(f_in)
-        for rec in rec_str:
-            self.__out.append(rec)
+        with open(self.__filename,'rb') as f_in:
+            self.__out=pickle.load(f_in)
         #
     def add(self,metod,comment,zapros):
         #Внесение комментария в список
@@ -68,7 +70,6 @@ class Journal(object):
         #
         tm=time.asctime()
         self.__out.append((tm,metod,comment,zapros))
-        self.save()
         return len(self.__out)
 #
 #
@@ -77,28 +78,17 @@ class set_info(object):
     def __init__(self,dbname,path):
         self.dbname=dbname
         self.path=path
-#
-#
-#
-class database(set_info):
-    #соединение с файлом базы данных sqlite  и отправка запросов
-    def __init__(self,dbname=None,path=None):
-        #Начальные значения переменных
-        #
-        set_info.__init__(self,dbname,path)
-        #Путь к БД
-        if (dbname!=None)and(os.path.exists(path+dbname)):
-            self.dbname=path+dbname
         #Результат последнего запроса
         self.result=None
         #Список ошибок
-        self.__errorlist=Journal(True,'error')
-        #
+        self.log=Journal(False,'error')
+        self.error=False
+    #
     def _execute(self,zapros,param=None):
-        #Выполнение запроса к БД
-        #zapros-запрос
-        #param-параметры запроса кортеж переменных заменяющих в запросе знаки ?
-        #
+        '''Выполнение запроса к БД
+        zapros-запрос
+        param-параметры запроса кортеж переменных заменяющих в запросе знаки ?
+        '''
         res=False
         #
         if param==None: param=()
@@ -109,7 +99,8 @@ class database(set_info):
             try:
                 cursor.execute(zapros,param)
             except:
-                self.__errorlist.add('execute','Некорректный запрос',zapros)
+                self.log.add('execute','Некорректный запрос',zapros)
+                self.error=True
             conn.commit()
             #количество полученных записей
             self.__rcount=cursor.rowcount
@@ -117,90 +108,114 @@ class database(set_info):
             #закрываем соединение
             cursor.close()
             conn.close()
-            if len(self.result)>0:
+            if self.result:
                 res=self.result
         return res
     #
-    def get_tables(self):
-        #Список таблиц в БД
+#
+#
+#
+class database(set_info):
+    '''соединение с файлом базы данных sqlite  и отправка запросов'''
+    def __init__(self,dbname=None,path=None):
+        #Начальные значения переменных
+        #
+        set_info.__init__(self,dbname,path)
+        #Путь к БД
+        if (dbname!=None)and(os.path.exists(path+dbname)):
+            self.dbname=path+dbname
+        #
+    def list_tables(self):
+        '''Список таблиц в БД'''
         #
         zapros='SELECT "name" from "sqlite_master"'
         self._execute(zapros)
         res=[x[0] for x in self.result]
         return res
     #
+    def get_table(self,table_name):
+        '''Получить ссылку на таблицу
+           table_name - имя таблицы'''
+        #
+        if self.exists_tables(table_name):
+            filds_name_type=self.get_tables_info(table_name)
+            newtbl=tables(self.dbname,self.path,table_name,filds_name_type,True)
+            self.log.add('open table','Открыта таблица "{0}" в базе данных "{1}"'.format(table_name,self.dbname),'')
+        else:
+            newtbl=False
+            self.log.add('open table','Таблица "{0}" в базе данных "{1}" не существует'.format(table_name,self.dbname),'')
+        return newtbl
+    #
     def exists_tables(self,table_name):
-        #проверка, существует ли таблица в базе данных
+        '''Проверка, существует ли таблица в базе данных
+        table_name - имя таблицы'''
         #
-        #table_name - имя таблицы
-        #
-        if table_name in self.get_tables(): res=True
-        else: res=False
+        if table_name in self.list_tables():
+            res=True
+        else:
+            res=False
         return res
     #
     def get_tables_info(self,table_name):
-        #Полная информация о таблице
+        '''Полная информация о таблице
+        table_name=None - имя таблицы'''
         #
-        #table_name=None - имя таблицы
-        #
-        zapros='PRAGMA table_info ('+table_name+')'
+        zapros='PRAGMA table_info ({0})'.format(table_name)
         res=[]
         [res.append([x[1],x[2]]) for x in self._execute(zapros)]
         return res
     #
     def create_table(self,table_name,fld_type):
-        #Создание таблицы
+        '''Создание таблицы
+        table_name=None - имя таблицы
+        fld_type Словарь с именами и типами полей таблицы'''
         #
-        #table_name=None - имя таблицы
-        #fld_type Словарь с именами и типами полей таблицы
-        #
-        res=False
-        if isinstance(fld_type,dict) and (not self.exists_tables(table_name)):
-            fld=['"'+f+'" '+t  for f,t in fld_type.items()]
-            zapros='CREATE TABLE "'+table_name+'"('+string.join(fld,',')+')'
-            if self._execute(zapros)!=False:
-                self.__errorlist.add('create','Создана таблица '+table_name,zapros)
-                res=True
-        return res
+        newtbl=False
+        if isinstance(fld_type,dict):#and (not self.exists_tables(table_name))
+            fld=['"{0}" {1}'.format(f,t)  for f,t in fld_type.items()]
+            zapros='CREATE TABLE "{0}"({1})'.format(table_name,','.join(fld))
+            self._execute(zapros)
+        return self.get_table(table_name)
         #
     def delete_table(self,table_name):
-        #Удаление таблицы
-        #
-        #table_name=None - имя таблицы
+        '''Удаление таблицы
+        table_name=None - имя таблицы'''
         #
         res=False
         if self.exists_tables(table_name):
-            zapros='DROP TABLE "'+table_name+'"'
+            zapros='DROP TABLE "{0}"'.format(table_name)
             if self._execute(zapros,())!=False:
-                self.__errorlist.add('delete','Удалена таблица: '+table_name,zapros)
+                self.__log.add('delete','Удалена таблица: {0}'.format(table_name),zapros)
                 res=True
         else:
-            self.__errorlist.add('delete','Таблица: '+table_name+' не существует',zapros)
+            self.log.add('delete','Таблица: {0} не существует'.format(table_name),zapros)
         return res
 #
 #
 #
-class tables(database):
-    #работа с таблицей из БД
+class tables(set_info):
+    '''Работа с таблицей из БД'''
     #
-    def __init__(self,dbname=None,path=None,table_name=None):
+    def __init__(self,dbname=None,path=None,table_name=None,fldnametype=None,log=True):
         #БД по умолчанию
-        database.__init__(self,dbname,path)
+        set_info.__init__(self,dbname,path)
         #Начальные значения переменных
-        #Журнал действий
-        self.__log=Journal(True,'log')
         #Имя текущей таблицы
-        self.set_table_name(table_name)
+        self.__table_name=table_name
+        #
+        self.__fldnametype=fldnametype
+        #
+        self.__fldname=[x[0] for x in self.__fldnametype]
     #
     def insert(self,fld_nm_val):
-        #Вставка в таблицу
+        '''Вставка в таблицу
+        fld_nm_val-словарь {'param_name': param_value}'''
         #
-        #fld_nm_val-словарь {'param_name': param_value}
         #Компоновка запроса
-        table_name=self.table_name
+        table_name=self.__table_name
         #
         res=False
-        if table_name:
+        if self.__table_name:
             fld_nm_val=self._validate_filds_name(fld_nm_val)
             #
             if fld_nm_val!=False:
@@ -209,44 +224,36 @@ class tables(database):
                     param.append(v)
                     fld.append(f)
                 param=tuple(param)
-                fld=u'('+string.join(fld,u',')+u')'
-                val=u'('+string.join(["?"]*len(fld_nm_val),u',')+u')'
                 #
-                zapros=u'INSERT INTO '+table_name+fld+u' VALUES'+val
-                zapros=codecs.utf_8_decode(zapros)[0]
-                #
+                zapros='INSERT INTO {0} ({1}) VALUES ({2})'.format(self.__table_name,','.join(fld),','.join(["?"]*len(fld_nm_val)))
                 res=self._execute(zapros,param)
+                res=not self.error
         return res
     #
     def select(self,where='1=1',filds='*'):
-        #Выборка из таблицы
-        #
-        #where='1=1' - условие
-        #filds='*' - список полей []
-        #
-        table_name=self.table_name
+        '''Выборка из таблицы
+        where='1=1' - условие
+        filds='*' - список полей []'''
         #
         res=False
-        if table_name:
+        if self.__table_name:
             filds=self._validate_filds_name(filds)
-            if filds==False:
+            if isinstance(filds,list):
+                filds=','.join(filds)
+            elif filds==False:
                 filds='*'
-            elif isinstance(filds,list):
-                filds=string.join(filds,',')
             #
-            zapros=u'SELECT '+filds+u' from '+table_name+u' WHERE '+where
-            zapros=codecs.utf_8_decode(zapros)[0]
+            zapros='SELECT {0} FROM {1} WHERE {2}'.format(filds,self.__table_name,where)
             #
             res=self._execute(zapros)
+        self.log.add('select',res,zapros)
         return res
     #
     def update(self,fld_nm_val,where):
-        #Обновление записи
-        #
-        #where - условие
-        #fld_nm_val-словарь {'param_name': param_value}
-        #
-        table_name=self.table_name
+        '''Обновление записи
+        where - условие
+        fld_nm_val-словарь {'param_name': param_value}
+        table_name=self.__table_name'''
         #
         res=False
         if table_name:
@@ -258,31 +265,27 @@ class tables(database):
                     param.append(v)
                     fld.append(f+'=?')
                 param=tuple(param)
-                fld=string.join(fld,',')
+                fld=','.join(fld)
                 #
-                zapros=u'UPDATE '+table_name+u' SET '+fld+u' WHERE '+where
-                zapros=codecs.utf_8_decode(zapros)[0]
+                zapros='UPDATE {0} SET {1} WHERE {2}'.format(table_name,fld,where)
                 #
-                res=self._execute(zapros,param)
+                self._execute(zapros,param)
+                res=not self.error
         return res
     #
     def delete(self,where):
-        #удаление записи
-        #
-        #where - условие
-        #
-        table_name=self.table_name
+        '''Удаление записи
+        where - условие'''
         #
         res=False
-        if table_name:
-            zapros='DELETE from '+table_name+' WHERE '+where
-            zapros=codecs.utf_8_decode(zapros)[0]
+        if self.__table_name:
+            zapros='DELETE from {0} WHERE {1}'.format(self.__table_name,where)
             res=self._execute(zapros)
             #
         return res
     #
     def count(self):
-        #Количество записей в текущей таблице
+        '''Количество записей в текущей таблице'''
         #
         res=self.select()
         if res:
@@ -290,50 +293,31 @@ class tables(database):
         else:
             return 0
     #
-    def set_table_name(self,table_name):
-        #Открыть новую таблицу
-        #
-        #table_name=None - имя таблицы
-        #
-        if self.exists_tables(table_name):
-            self.__log.add('open table',u'Открыта таблица "'+table_name+u'" в базе данных "'+self.dbname+u'"','')
-            self.table_name=table_name
-            self.filds_name_type=self.get_tables_info(self.table_name)
-            self.filds_name=[x[0] for x in self.filds_name_type]
-            result=True
-        else:
-            self.__log.add('open table',u'Таблица "'+table_name+u'" в базе данных "'+self.dbname+u'" не существует','')
-            self.table_name=None
-            result=False
-        return result
-    #
     def _validate_filds_name(self,filds):
-        #проверка имени поля
-        #
-        #filds - словарь {fild_name:fild_value} или список имен полей
+        '''проверка имени поля
+        filds - словарь {fild_name:fild_value} или список имен полей'''
         #
         #если проверяется словарь
         if isinstance(filds,dict):
-            del_fld=[fld for fld in filds.keys() if not(fld in self.filds_name)]
+            del_fld=[fld for fld in filds.keys() if not(fld in self.__fldname)]
             for fld in del_fld:
                 del filds[fld]
             if len(filds)==0: filds=False
         #Если проверяется список
         elif isinstance(filds,list):
-            filds=[fld for fld in filds if fld in self.filds_name]
+            filds=[fld for fld in filds if fld in self.__fldname]
             if len(filds)==0: filds=False
         #если проверяется строка
         elif isinstance(filds,str):
-            if not(filds in self.filds_name): filds=False
+            if not(filds in self.__fldname): filds=False
         else: filds=False
         #возврат словаря/списка/строки соответствующих полям в таблице
         return filds
     #
     def _validate_filds_value(self,fld_name,fld_value):
-        #Проверка fld_name записи
-        #
-        #fld_name - имя поля
-        #fld_value - значение
+        '''Проверка fld_name записи
+        fld_name - имя поля
+        fld_value - значение'''
         #
         res_qwery=self.select(filds=fld_name)
         if res_qwery:
@@ -345,20 +329,21 @@ class tables(database):
         else:
             return False
     #
-    def _last_insert_id(self):
-        #id последней вставленной записи
+    def max_fld(self,fld):
+        '''Максимальное значение столбца'''
         #
-        zapros='SELECT MAX(id) FROM "'+self.table_name+'"'
-        return self._execute(zapros)[0][0]
+        zapros='SELECT MAX({0}) FROM "{1}"'.format(fld,self.__table_name)
+        res=self._execute(zapros)
+        if not self.error:
+            max_res=res[0][0]
+        else:
+            max_res=False
+        return max_res
+    #
+    #
     #
 def main():
     info()
-    table=tables('term_base.sqlite',os.path.abspath('.'),'oxidetepl')
-    res=table.create_table('test1',{'n1':'stri','n2':'int'})
-    res=table.select('subst="'+'MgO'+'"',["subst","dt1","dt2","dh298","da","db","dc","dd","ds298","uat0","m_coeff","n_coeff","dhh298","dhfp","z_coeff"])
-
-    print res
-
 if __name__ == '__main__':
     main()
     #
